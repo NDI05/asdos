@@ -27,6 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 model = [
   "torch==2.15.0",
+  "torchvision==0.29.2",
   "transformers==5.22.1",
   "accelerate==1.13.0",
   "qwen-vl-utils==0.0.14",

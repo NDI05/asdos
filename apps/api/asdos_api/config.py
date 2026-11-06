@@ -14,6 +14,10 @@ class Settings:
     artifact_dir: Path = Path(os.getenv("ASDOS_ARTIFACT_DIR", "./data/private")).resolve()
     model_dir: Path = Path(os.getenv("ASDOS_MODEL_DIR", "./models/Qwen3-VL-4B-Instruct")).resolve()
     model_revision: str = os.getenv("ASDOS_MODEL_REVISION", "ebb281ec70b05090aa6165b016eac8ec08e71b17")
+    transcriber: str = os.getenv("ASDOS_TRANSCRIBER", "qwen").strip().lower()
+    trocr_dir: Path = Path(os.getenv(
+        "ASDOS_TROCR_DIR", "./data/private/trocr-all-2348-v1/model-final"
+    )).resolve()
     session_secret: str = os.getenv("ASDOS_SESSION_SECRET", "")
     cookie_secure: bool = os.getenv("ASDOS_COOKIE_SECURE", "false").lower() == "true"
     celery_eager: bool = os.getenv("ASDOS_CELERY_EAGER", "false").lower() == "true"
@@ -29,6 +33,8 @@ class Settings:
     def validate(self) -> None:
         if self.environment == "production" and len(self.session_secret) < 32:
             raise RuntimeError("ASDOS_SESSION_SECRET must be configured with at least 32 characters")
+        if self.transcriber not in {"qwen", "trocr"}:
+            raise RuntimeError("ASDOS_TRANSCRIBER must be qwen or trocr")
         if self.max_upload_bytes <= 0 or self.max_pdf_pages <= 0 or self.max_render_pixels <= 0:
             raise RuntimeError("PDF limits must be positive")
         if self.export_retention_days < 0:

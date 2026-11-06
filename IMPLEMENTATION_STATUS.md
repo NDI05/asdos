@@ -1,5 +1,31 @@
 # Status Implementasi ASDOS
 
+## 5 November 2026: batch PDF dan perbaikan preview
+
+Batch hingga 100 PDF dipisah per submission; identitas OCR adalah usulan dan usulan nilai otomatis menunggu konfirmasi identitas/pemetaan. Preview memberi label nomor, umpan balik pilihan, dan hapus pemetaan. Catatan historis menyebut 77 tes backend, 22 tes frontend, build, serta batch sintetis dengan publikasi job dimock. Benchmark tulisan tangan nyata dan akurasi identitas belum tersedia. Artefak run yang menggunakan data privat tidak disertakan.
+
+## 4 November 2026: pemetaan jawaban otomatis
+
+Upload baru dapat menghasilkan draf area, OCR literal dan pemetaan nomor untuk ditinjau. Catatan run lokal menunjukkan hasil perlu ditinjau pengguna sebelum dipakai. Backend 67 tes, frontend 17 tes dan build lulus pada pass tersebut; benchmark akurasi belum tersedia. Dokumen dan artefak dari pengujian privat tidak disertakan.
+
+## 4 November 2026: indikator progres upload dan OCR
+
+Panel progres dan status per nomor tersedia; job dipulihkan dari API saat lembar dibuka kembali. Pemetaan manual dibedakan dari proses worker yang masih berjalan. Backend 50 tes, frontend 13 tes dan build lulus; transisi queued → running → hasil tersedia diperiksa di browser dengan PDF sintetis dan Qwen nyata pada lingkungan terpisah. Lihat [QA_PROGRESS_2026-11-04.md](docs/implementation/QA_PROGRESS_2026-11-04.md).
+
+## 4 November 2026: model nyata dan pemulihan PDF_PIXEL_LIMIT
+
+Qwen3-VL-4B sudah diprovisikan dan tiga smoke inference sintetis lulus pada MPS. Runtime model kini mencakup torchvision yang dibutuhkan processor; kontrak grader v2 memakai bentuk JSON eksplisit dan maksimum satu schema repair dengan validasi tetap ketat. Jalur native `make start` menjalankan API, worker solo dan scheduler dengan Redis lokal di Docker.
+
+Renderer menyesuaikan DPI dalam batas piksel. Pada validasi lokal, render dan transkripsi Qwen selesai, tetapi hasil OCR memerlukan review; retry unggahan gagal juga dipulihkan. Backend 49 tes, frontend 5 tes dan build lulus pada pass tersebut, dan preview browser diperiksa. Benchmark akurasi belum tersedia; catatan rinci uji dokumen privat tidak disertakan.
+
+## Riwayat 3 November: soal dan bobot saja
+
+Backend 38 tes lulus; frontend 5 tes lulus; TypeScript/Vite build, compileall dan diff check lulus. Alur acuan otomatis, konfirmasi identitas terpisah dan guard unreadable sudah diperbaiki. E2E API soal+bobot hingga Excel memakai fake model berlabel; bukan inference Qwen. Migrasi SQLite 0002 telah diuji dan DB development dibackup sebelum dimigrasikan.
+
+Qwen nyata masih blocked: pemasangan extra model gagal DNS files.pythonhosted.org, checkpoint belum tersedia, smoke mengembalikan MODEL_UNAVAILABLE. Percobaan bind server native ditolak izin socket; browser E2E belum dijalankan. Detail: [QA_REPAIR_2026-11-03.md](docs/implementation/QA_REPAIR_2026-11-03.md).
+
+## Catatan pass sebelumnya
+
 Pemeriksaan: 3 November 2026.
 
 ## Terverifikasi pada pass ini

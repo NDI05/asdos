@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sys
+from importlib.metadata import version
 from pathlib import Path
 
 MODEL_ID = "Qwen/Qwen3-VL-4B-Instruct"
@@ -37,6 +38,14 @@ def main() -> int:
     )
     if not (target / "config.json").is_file():
         raise RuntimeError("Download selesai tanpa config.json; checkpoint tidak valid.")
+    weights = list(target.glob("*.safetensors"))
+    if not weights or any(path.stat().st_size == 0 for path in weights):
+        raise RuntimeError("Checkpoint belum lengkap: bobot safetensors tidak tersedia.")
+    index = target / "model.safetensors.index.json"
+    if index.is_file():
+        shards = set(json.loads(index.read_text())["weight_map"].values())
+        if not shards or any(not (target / name).is_file() for name in shards):
+            raise RuntimeError("Checkpoint belum lengkap: ada shard yang belum diunduh.")
     hashes = {
         path.relative_to(target).as_posix(): file_hash(path)
         for path in sorted(target.rglob("*"))
@@ -47,7 +56,8 @@ def main() -> int:
         "model_id": MODEL_ID,
         "revision": REVISION,
         "license": "Apache-2.0",
-        "runtime": {"torch": "2.15.0", "transformers": "5.22.1", "trust_remote_code": False},
+        "runtime": {name: version(name) for name in ("torch", "torchvision", "transformers", "accelerate")}
+                   | {"trust_remote_code": False},
         "files": hashes,
     }
     encoded = json.dumps(manifest, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()

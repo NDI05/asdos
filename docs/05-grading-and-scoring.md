@@ -1,5 +1,9 @@
 # 05 — Rubrik, Koreksi, dan Pembobotan
 
+## Input pengguna yang disederhanakan
+
+Keputusan terbaru: pengguna cukup memasukkan soal dan bobot. Model pralatih menyusun jawaban acuan, alternatif dan kriteria sebagai draft; pengguna tidak diwajibkan mengetik kunci per nomor. Acuan disusun tanpa akses jawaban mahasiswa, divalidasi di server, dan ditampilkan untuk ditinjau/disahkan. Draft yang belum sah tidak dipakai menilai. Penilaian serta finalisasi tidak berubah menjadi otonom.
+
 ## Standar penilaian
 
 Soal menetapkan apa yang ditanyakan; rubrik menetapkan apa yang diberi kredit. Keduanya perlu versi dan persetujuan dosen. AI boleh mengusulkan kunci/kriteria dari soal, tetapi usulan harus berstatus draft sampai diverifikasi. Bila soal ambigu atau kunci bertentangan, hentikan penilaian nomor tersebut dan minta penyelesaian rubrik.

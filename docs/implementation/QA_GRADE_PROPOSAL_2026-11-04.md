@@ -1,0 +1,7 @@
+# Perbaikan usulan nilai — 4 November 2026
+
+Riwayat pekerjaan lokal menunjukkan kegagalan `GRADING_FAILED` sebelum ModelRun dibuat pada jawaban yang memiliki transkripsi manusia. Segmen transkripsi tersebut tidak memuat `page_index`; worker sebelumnya menganggap field itu wajib. Ini berbeda dari kesalahan penalaran model atau rubrik.
+
+Worker sekarang mengambil indeks halaman dari region → revisi gambar → halaman di database, dan memeriksa keterikatan region pada pemetaan aktif serta dokumen/layout aktif. Referensi tidak cocok menghasilkan `TRANSCRIPT_EVIDENCE_INVALID` sebelum model dipanggil. Tidak ada konversi hasil gagal menjadi nilai. Versi katalog bukti dimasukkan ke fingerprint agar kegagalan versi sebelumnya yang sudah mencapai batas tiga percobaan tidak menghalangi permintaan baru. Pekerjaan lama tetap tersimpan. Layar menampilkan kredit per kriteria, alasan, dan potongan bukti untuk ditinjau; persetujuan tetap oleh dosen.
+
+Pada database terpisah dengan soal, PDF, rubrik, identitas, dan transkripsi sintetis, alur API → worker → model Qwen asli pada MPS → usulan berhasil dan menghasilkan satu kriteria. Tidak ada jawaban atau nilai mahasiswa asli yang diubah. Tes integrasi dengan model palsu juga memeriksa transkripsi manual tanpa page_index, kegagalan referensi region yang salah sebelum pemanggilan model, dan percobaan lama yang habis. Seluruh 67 tes backend dan 18 tes frontend serta build frontend lulus. Uji sintetis tidak membuktikan ketepatan penilaian pada jawaban nyata.

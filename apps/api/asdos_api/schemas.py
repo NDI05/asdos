@@ -45,6 +45,26 @@ class QuestionSet(StrictModel):
     questions: list[QuestionInput] = Field(min_length=1, max_length=100)
 
 
+class QuestionSeed(StrictModel):
+    stable_question_id: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=32)
+    order: int = Field(ge=1, le=500)
+    text: str = Field(min_length=1, max_length=12000)
+    weight: str = Field(min_length=1, max_length=32)
+    answer_type: str = Field(default="essay", pattern="^(essay|short_text|list|simple_table)$")
+
+
+class GenerateRubricRequest(StrictModel):
+    expected_version: int = Field(ge=1)
+    questions: list[QuestionSeed] = Field(min_length=1, max_length=100)
+
+
+class GeneratedRubric(StrictModel):
+    reference_answer: str = Field(min_length=1, max_length=12000)
+    alternatives: list[str] = Field(default_factory=list, max_length=30)
+    criteria: list[CriterionInput] = Field(min_length=1, max_length=12)
+
+
 class RevisionExpectation(StrictModel):
     expected_version: int = Field(ge=1)
     confirmation: bool = True
@@ -79,9 +99,26 @@ class PageRotationInput(StrictModel):
 
 
 class MappingInput(StrictModel):
-    region_ids: list[str] = Field(min_length=1, max_length=100)
+    region_ids: list[str] = Field(min_length=0, max_length=100)
     expected_transcript_revision: int = Field(ge=0)
     expected_mapping_revision_id: str | None = Field(default=None, min_length=36, max_length=36)
+
+
+class AutoMappingStartInput(StrictModel):
+    expected_document_id: str = Field(min_length=36, max_length=36)
+    expected_layout_revision_id: str = Field(min_length=36, max_length=36)
+
+
+class AutoMappingConfirmInput(StrictModel):
+    expected_layout_revision_id: str = Field(min_length=36, max_length=36)
+    expected_submission_version: int = Field(ge=1)
+    mapping_revision_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class RegionExclusionInput(StrictModel):
+    excluded: bool
+    reason: str = Field(min_length=3, max_length=1000)
+    expected_layout_revision_id: str = Field(min_length=36, max_length=36)
 
 
 class TranscriptionInput(StrictModel):

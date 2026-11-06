@@ -2,7 +2,7 @@ from celery import Celery
 
 from apps.api.asdos_api.config import settings
 
-celery_app = Celery("asdos", broker=settings.redis_url, include=["apps.worker.tasks"])
+celery_app = Celery("asdos", broker=settings.redis_url, include=["apps.worker.tasks", "apps.worker.auto_answers"])
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",

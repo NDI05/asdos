@@ -5,7 +5,7 @@ Ini instruksi untuk mengerjakan implementasi sekarang. Jangan berhenti pada anal
 ## 1. Workspace dan sumber spesifikasi
 
 Gunakan workspace proyek yang sedang terbuka. Pada komputer saya, lokasinya:
- /Users/user/Documents/Gabut-Code/asdos
+ .
 
 Jika lokasi berbeda pada environment Anda, gunakan root repository yang memuat AGENTS.md, docs/, dan agent-skills/. Jangan membuat proyek kedua yang terpisah tanpa kebutuhan nyata.
 
@@ -217,7 +217,7 @@ Serahkan:
 - IMPLEMENTATION_STATUS.md: requirement/milestone, status, bukti dan blocker.
 - TEST_REPORT.md: perintah aktual, hasil, serta tes yang belum dijalankan.
 
-Jangan menghapus dokumentasi rencana; perbarui bagian yang sudah diimplementasikan agar statusnya benar. Lisensi proyek masih berupa usulan: siapkan inventory dependency/notice, jangan mengklaim persetujuan lisensi pemegang hak atau kontak keamanan yang belum diberikan.
+Jangan menghapus dokumentasi rencana; perbarui bagian yang sudah diimplementasikan agar statusnya benar. Lisensi kode dan dokumentasi proyek adalah Apache-2.0 sesuai LICENSE; lisensi ini tidak mencakup data mahasiswa, checkpoint privat, atau dependency pihak ketiga. Periksa lisensi dependency/notice secara terpisah dan jangan mencantumkan kontak keamanan yang belum dikonfirmasi.
 
 Jika Git tersedia dan dapat ditulis, simpan perubahan secara lokal mengikuti aturan proyek; jangan push tanpa otorisasi. Jika .git atau .agents dibatasi, jangan bypass izin atau menghentikan implementasi. Pertahankan panduan di agent-skills/ dan laporkan batas tersebut secara singkat.
 

@@ -1,6 +1,6 @@
 # Berkontribusi ke ASDOS
 
-Status awal proyek adalah perencanaan. Mulai dari [roadmap](docs/11-implementation-roadmap.md), baca [aturan agent](AGENTS.md), lalu pilih issue dengan keluaran yang bisa diuji.
+ASDOS adalah prototipe lokal yang sedang dievaluasi. Mulai dari [roadmap](docs/11-implementation-roadmap.md), baca [aturan proyek](AGENTS.md), lalu pilih issue dengan acceptance yang bisa diperiksa.
 
 ## Sebelum mengubah source
 
@@ -14,10 +14,20 @@ Satu PR menyelesaikan satu perilaku yang utuh. Sertakan ringkasan perubahan, ala
 
 Untuk perubahan kontrak, perbarui dokumen serta tes konsumen. Untuk koreksi penilaian, berikan contoh yang menunjukkan angka sebelum/sesudah dan bukti bahwa nilai yang sudah disahkan tidak berubah diam-diam.
 
-## Standar source yang direncanakan
+## Tooling dan pemeriksaan
 
-Python dengan type hints, formatter/linter dan unit/integration tests; TypeScript strict dengan komponen UI teruji untuk alur kritis. Nama simbol dan API berbahasa Inggris, dokumentasi produk utama berbahasa Indonesia. Dependensi dikunci setelah proof of compatibility M1. Perintah setup resmi baru ditambahkan setelah dapat dijalankan pada checkout bersih.
+Backend menggunakan Python 3.12 dan `uv`; frontend menggunakan TypeScript/React dan npm. Nama simbol dan API berbahasa Inggris, dokumentasi produk utama berbahasa Indonesia. Dependensi dipatok di `pyproject.toml` dan `uv.lock`.
+
+Sebelum mengirim perubahan, jalankan pemeriksaan yang relevan:
+
+```bash
+make test
+make check
+make build-web
+```
+
+Laporkan perintah yang benar-benar dijalankan beserta hasilnya. Tes sintetik tidak membuktikan akurasi pada tulisan tangan nyata.
 
 ## Lisensi kontribusi
 
-Usulan: kontribusi kode di bawah Apache-2.0 dengan DCO/sign-off; maintainer menyelesaikan kebijakan ini sebelum menerima kontribusi eksternal. Jangan menambahkan kode/model/dataset yang lisensinya tidak kompatibel atau tidak jelas. Lisensi kode tidak otomatis melisensikan data mahasiswa atau bobot model.
+Kontribusi kode dan dokumentasi diterima di bawah Apache-2.0 sebagaimana dinyatakan dalam [LICENSE](LICENSE). Saat ini proyek tidak mensyaratkan DCO atau CLA. Kontributor harus memiliki hak untuk menyerahkan perubahan tersebut. Jangan menambahkan kode, model, dataset, atau aset yang lisensinya tidak kompatibel atau tidak jelas. Lisensi kode tidak otomatis melisensikan data mahasiswa atau bobot model.

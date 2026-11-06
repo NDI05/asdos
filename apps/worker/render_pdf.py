@@ -9,6 +9,24 @@ import math
 import sys
 from pathlib import Path
 
+RENDER_POLICY_VERSION = "fit-pixel-budget.v2"
+
+
+def bounded_render_dpi(width_pt: float, height_pt: float, dpi: int, max_pixels: int) -> int:
+    """Fit a page inside the raster budget before PDFium allocates its bitmap."""
+    if (not all(math.isfinite(value) and value > 0 for value in (width_pt, height_pt))
+            or dpi < 1 or max_pixels < 1):
+        raise ValueError("PDF_PIXEL_LIMIT")
+    width_px, height_px = math.ceil(width_pt * dpi / 72), math.ceil(height_pt * dpi / 72)
+    if width_px * height_px <= max_pixels:
+        return dpi
+    effective = min(dpi, math.floor(dpi * math.sqrt(max_pixels / (width_px * height_px))))
+    while effective >= 1:
+        if math.ceil(width_pt * effective / 72) * math.ceil(height_pt * effective / 72) <= max_pixels:
+            return effective
+        effective -= 1
+    raise ValueError("PDF_PIXEL_LIMIT")
+
 
 def render(input_pdf: Path, output_dir: Path, dpi: int, max_pages: int, max_pixels: int, extract_text: bool) -> dict:
     try:
@@ -30,12 +48,11 @@ def render(input_pdf: Path, output_dir: Path, dpi: int, max_pages: int, max_pixe
             page = document[page_index]
             try:
                 width_pt, height_pt = page.get_size()
-                width_px = math.ceil(width_pt * dpi / 72)
-                height_px = math.ceil(height_pt * dpi / 72)
-                if width_px <= 0 or height_px <= 0 or width_px * height_px > max_pixels:
-                    raise ValueError("PDF_PIXEL_LIMIT")
-                bitmap = page.render(scale=dpi / 72, rotation=0)
+                effective_dpi = bounded_render_dpi(width_pt, height_pt, dpi, max_pixels)
+                bitmap = page.render(scale=effective_dpi / 72, rotation=0)
                 try:
+                    if bitmap.width * bitmap.height > max_pixels:
+                        raise ValueError("PDF_PIXEL_LIMIT")
                     image = bitmap.to_pil().convert("RGB")
                     output = output_dir / f"page-{page_index:04d}.png"
                     image.save(output, format="PNG", optimize=False)
@@ -49,6 +66,8 @@ def render(input_pdf: Path, output_dir: Path, dpi: int, max_pages: int, max_pixe
                             textpage.close()
                     pages.append({
                         "page_index": page_index,
+                        "dpi": effective_dpi,
+                        "render_scale": effective_dpi / 72,
                         "width_px": image.width,
                         "height_px": image.height,
                         "pdf_width_points": width_pt,
@@ -58,7 +77,8 @@ def render(input_pdf: Path, output_dir: Path, dpi: int, max_pages: int, max_pixe
                         "sha256": hashlib.sha256(data).hexdigest(),
                         "text": page_text,
                         "quality_metrics": _quality_metrics(data),
-                        "quality_flags": ["review_threshold_not_calibrated"],
+                        "quality_flags": ["review_threshold_not_calibrated"] + (
+                            ["render_resolution_reduced"] if effective_dpi < dpi else []),
                     })
                 finally:
                     bitmap.close()
@@ -66,7 +86,8 @@ def render(input_pdf: Path, output_dir: Path, dpi: int, max_pages: int, max_pixe
                 page.close()
     finally:
         document.close()
-    manifest = {"schema_version": "render-manifest.v1", "dpi": dpi, "page_count": len(pages), "pages": pages}
+    manifest = {"schema_version": "render-manifest.v1", "render_policy": RENDER_POLICY_VERSION,
+                "dpi": dpi, "max_pixels": max_pixels, "page_count": len(pages), "pages": pages}
     (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     return manifest
 

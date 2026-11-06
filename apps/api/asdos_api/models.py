@@ -143,6 +143,8 @@ class Document(Base):
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     validation_status: Mapped[str] = mapped_column(String(24), default="pending")
     extracted_text: Mapped[str] = mapped_column(Text, default="")
+    auto_process: Mapped[bool] = mapped_column(Boolean, default=False)
+    analysis_result: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
 
@@ -204,6 +206,8 @@ class Region(Base):
     parent_region_id: Mapped[str | None] = mapped_column(ForeignKey("regions.id"), nullable=True)
     polygon: Mapped[list] = mapped_column(JSON)
     region_type: Mapped[str] = mapped_column(String(24), default="answer")
+    analysis: Mapped[dict] = mapped_column(JSON, default=dict)
+    excluded_from_mapping: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
@@ -407,7 +411,7 @@ class PipelineJob(Base):
     assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id", ondelete="CASCADE"), index=True)
     submission_id: Mapped[str | None] = mapped_column(ForeignKey("submissions.id", ondelete="CASCADE"), index=True, nullable=True)
     answer_id: Mapped[str | None] = mapped_column(ForeignKey("answers.id", ondelete="CASCADE"), index=True, nullable=True)
-    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    document_id: Mapped[str | None] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=True)
     draft_assessment_revision_id: Mapped[str | None] = mapped_column(ForeignKey("assessment_revisions.id"), nullable=True)
     kind: Mapped[str] = mapped_column(String(40))
     stage: Mapped[str] = mapped_column(String(32))

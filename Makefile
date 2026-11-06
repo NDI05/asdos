@@ -1,4 +1,4 @@
-.PHONY: install install-model install-web dev-api dev-web migrate create-owner test check build-web compose-up compose-down compose-test purge-expired-exports example-xlsx
+.PHONY: install install-model setup-model install-web start dev-api dev-web migrate create-owner test check build-web compose-up compose-down compose-test purge-expired-exports example-xlsx
 
 ifneq (,$(wildcard .env))
 include .env
@@ -11,8 +11,14 @@ install:
 install-model:
 	uv sync --locked --extra model --extra test
 
+setup-model:
+	python3 -m scripts.setup_model
+
 install-web:
 	cd apps/web && npm ci --no-audit --no-fund
+
+start: build-web
+	uv run --locked --extra model --extra test python -m scripts.run_local
 
 dev-api:
 	uv run --locked python -m uvicorn apps.api.asdos_api.main:app --host 127.0.0.1 --port 8000 --reload

@@ -14,12 +14,13 @@ from sqlalchemy import select
 
 from apps.api.asdos_api.config import settings
 from apps.api.asdos_api.database import SessionLocal
-from apps.api.asdos_api.model_adapters import ModelUnavailable, qwen_adapter
+from apps.api.asdos_api.model_adapters import GRADER_PROMPT_VERSION, GRADING_EVIDENCE_VERSION, MODEL_REVISION, ModelUnavailable, get_transcriber, qwen_adapter, transcription_flags, transcription_status_for_flags, transcriber_fingerprint
 from apps.api.asdos_api.models import (
     Answer,
     AnswerMappingRevision,
     AnswerRegionLink,
     Artifact,
+    AuditEvent,
     Assessment,
     AssessmentRevision,
     CriterionProposalResult,
@@ -35,6 +36,7 @@ from apps.api.asdos_api.models import (
     RubricCriterion,
     Submission,
     TranscriptionRevision,
+    User,
     now_utc,
 )
 from packages.asdos_domain.scoring import CriterionSpec
@@ -61,7 +63,7 @@ def _begin(job_id: str) -> tuple[str, str] | None:
     worker_id = f"{uuid4()}"
     with SessionLocal.begin() as db:
         job = db.get(PipelineJob, job_id)
-        if not job or job.status in {"succeeded", "cancelled"}:
+        if not job or job.status in {"succeeded", "cancelled", "failed"}:
             return None
         if job.cancel_requested:
             job.status = "cancelled"
@@ -128,6 +130,7 @@ def process_document(self, job_id: str) -> dict:
     temp_root: Path | None = None
     created_storage_keys: list[str] = []
     committed = False
+    auto_job_id = None
     with _heartbeat(job_id, worker_id):
         try:
             with SessionLocal() as db:
@@ -142,6 +145,14 @@ def process_document(self, job_id: str) -> dict:
                 question_import = document.kind == "question_source"
                 original_sha = document.sha256
             manifest, temp_root = render_in_isolated_process(source_path, extract_text=question_import)
+            if question_import and any(not str(page.get("text", "")).strip() for page in manifest["pages"]):
+                for info in manifest["pages"]:
+                    if not str(info.get("text", "")).strip():
+                        segments, _ = qwen_adapter.transcribe([(temp_root / info["file"]).read_bytes()], assessment.language)
+                        if any(segment.flags for segment in segments):
+                            raise ModelUnavailable("QUESTION_TEXT_UNREADABLE", "Sebagian soal tidak terbaca; periksa gambar atau masukkan teks soal.")
+                        info["text"] = "\n".join(segment.text for segment in segments)
+
             created_pages: list[tuple[dict, str, str]] = []
             page_text: list[str] = []
             for info in manifest["pages"]:
@@ -178,6 +189,13 @@ def process_document(self, job_id: str) -> dict:
                     db.flush()
                     transform = {"type": "affine", "matrix": [1, 0, 0, 1, 0, 0], "coordinate_space": "canonical_render"}
                     inverse = {**transform, "inverse_of": "identity"}
+                    transform["render"] = {
+                        "requested_dpi": manifest["dpi"], "dpi": info["dpi"],
+                        "policy": manifest["render_policy"], "max_pixels": manifest["max_pixels"],
+                        "quality_flags": info["quality_flags"],
+                        "pdf_points_to_pixels": [info["width_px"] / info["pdf_width_points"],
+                                                 info["height_px"] / info["pdf_height_points"]],
+                    }
                     image_revision = PageImageRevision(
                         page_id=page.id,
                         sequence=1,
@@ -188,7 +206,7 @@ def process_document(self, job_id: str) -> dict:
                         transform=transform,
                         inverse_transform=inverse,
                         image_sha256=digest,
-                        preprocessing_version=f"pdfium-{manifest['dpi']}dpi.v1",
+                        preprocessing_version=f"pdfium-{manifest['render_policy']}-{info['dpi']}dpi",
                     )
                     db.add(image_revision)
                     db.flush()
@@ -229,9 +247,20 @@ def process_document(self, job_id: str) -> dict:
                 job.heartbeat_at = now_utc()
                 if document.submission_id:
                     submission = db.get(Submission, document.submission_id)
-                    if submission:
+                    if submission and submission.active_document_id == document.id:
                         submission.status = "needs_mapping" if submission.identity_status == "confirmed" else "awaiting_identity"
+                        if document.auto_process:
+                            from apps.api.asdos_api.auto_mapping import schedule_analysis
+                            auto_job_id = schedule_analysis(db, submission, document).id
             committed = True
+            if auto_job_id:
+                try:
+                    from apps.api.asdos_api.services import publish_job_outbox
+                    with SessionLocal() as db:
+                        publish_job_outbox(db, auto_job_id)
+                except Exception:
+                    # The committed outbox/reconciler will publish again; render remains successful.
+                    pass
             return {"job_id": job_id, "status": "succeeded", "pages": len(created_pages)}
         except PdfPipelineError as exc:
             return _failed(job_id, worker_id, exc.code)
@@ -265,7 +294,8 @@ def transcribe_answer(self, job_id: str) -> dict:
             if submission.identity_status != "confirmed":
                 return _failed(job_id, worker_id, "IDENTITY_CONFIRMATION_REQUIRED")
             mapping = db.get(AnswerMappingRevision, answer.active_mapping_revision_id) if answer.active_mapping_revision_id else None
-            if not mapping:
+            from apps.api.asdos_api.auto_mapping import current_mapping
+            if not mapping or not current_mapping(db,submission,answer):
                 return _failed(job_id, worker_id, "UNMAPPED_ANSWER")
             links = db.scalars(
                 select(AnswerRegionLink).where(
@@ -276,18 +306,20 @@ def transcribe_answer(self, job_id: str) -> dict:
             if not links:
                 return _failed(job_id, worker_id, "UNMAPPED_ANSWER")
             regions, images, region_fingerprint = _read_region_images(db, links)
+            transcriber = get_transcriber()
             input_fingerprint = canonical_hash({"document": job.document_id, "answer": answer.id,
-                                                "regions": region_fingerprint, "language": assessment.language})
+                                                "regions": region_fingerprint, "language": assessment.language,
+                                                "transcriber": transcriber_fingerprint()})
             if input_fingerprint != job.input_fingerprint:
                 return _failed(job_id, worker_id, "STALE_MODEL_INPUT")
             run = ModelRun(
                 task_type="transcription",
-                checkpoint="Qwen/Qwen3-VL-4B-Instruct",
-                checkpoint_revision=settings.model_revision,
-                runtime=qwen_adapter.runtime,
-                prompt_version="literal-transcription.v1",
-                schema_version="transcript.v1",
-                preprocessing_version="region-crop.v1",
+                checkpoint=transcriber.model_id,
+                checkpoint_revision=transcriber.revision,
+                runtime=transcriber.runtime,
+                prompt_version=transcriber.prompt_version,
+                schema_version=transcriber.schema_version,
+                preprocessing_version=transcriber.preprocessing_version,
                 input_fingerprint=input_fingerprint,
                 device="pending",
                 status="running",
@@ -295,7 +327,7 @@ def transcribe_answer(self, job_id: str) -> dict:
             db.add(run)
             db.commit()
             try:
-                segments, provenance = qwen_adapter.transcribe(images, assessment.language)
+                segments, provenance = transcriber.transcribe(images, assessment.language)
             except ModelUnavailable as exc:
                 run.status = "failed"
                 run.error_code = exc.code
@@ -344,6 +376,7 @@ def transcribe_answer(self, job_id: str) -> dict:
                 db.commit()
                 return _failed(job_id, worker_id, "STALE_MODEL_INPUT")
             revision_no = current_answer.transcript_revision + 1
+            transcript_flags = sorted({flag for segment in segments for flag in segment.flags})
             transcript = TranscriptionRevision(
                 answer_id=current_answer.id,
                 mapping_revision_id=mapping.id,
@@ -351,8 +384,8 @@ def transcribe_answer(self, job_id: str) -> dict:
                 parent_revision_id=current_answer.active_transcription_revision_id,
                 literal_text="\n".join(item["text"] for item in revision_data),
                 segments=revision_data,
-                status="transcribed",
-                flags=[],
+                status=transcription_status_for_flags(transcript_flags),
+                flags=transcript_flags,
                 source="model",
                 model_run_id=run.id,
             )
@@ -360,7 +393,7 @@ def transcribe_answer(self, job_id: str) -> dict:
             db.flush()
             current_answer.active_transcription_revision_id = transcript.id
             current_answer.transcript_revision = revision_no
-            current_answer.transcript_status = "transcribed"
+            current_answer.transcript_status = transcript.status
             current_answer.literal_text = transcript.literal_text
             current_answer.active_proposal_id = None
             current_job.status = "succeeded"
@@ -370,6 +403,11 @@ def transcribe_answer(self, job_id: str) -> dict:
             current_job.lease_until = None
             current_job.heartbeat_at = now_utc()
             db.commit()
+            if transcript.status == 'transcribed' and not transcript.flags:
+                from apps.api.asdos_api.router_submissions import _enqueue_automatic_grades
+                owner = db.get(User, assessment.owner_id)
+                if owner:
+                    _enqueue_automatic_grades(db, submission.id, owner)
             return {"job_id": job_id, "status": "succeeded", "segments": len(revision_data)}
     except Exception as exc:
         return _failed(job_id, worker_id, getattr(exc, "code", None) or "TRANSCRIPTION_FAILED")
@@ -396,6 +434,12 @@ def grade_answer(self, job_id: str) -> dict:
             if (not transcript or transcript.status not in {"transcribed", "corrected"}
                     or transcript.mapping_revision_id != answer.active_mapping_revision_id):
                 return _failed(job_id, worker_id, "ACTIVE_TRANSCRIPTION_REQUIRED")
+            from apps.api.asdos_api.auto_mapping import current_mapping
+            mapping = current_mapping(db,submission,answer)
+            if answer.mapping_status in {"auto_mapped", "unmapped"} or not mapping:
+                return _failed(job_id,worker_id,"AUTO_MAPPING_REVIEW_REQUIRED")
+            if transcript.flags or transcription_flags(transcript.literal_text):
+                return _failed(job_id, worker_id, "UNREADABLE_TRANSCRIPTION_REVIEW_REQUIRED")
             question = db.scalar(select(QuestionRevision).where(
                 QuestionRevision.assessment_revision_id == revision.id,
                 QuestionRevision.stable_question_id == answer.stable_question_id,
@@ -415,13 +459,33 @@ def grade_answer(self, job_id: str) -> dict:
                 } for item in criterion_rows],
             }
             question_payload = {"question_id": question.stable_question_id, "label": question.label, "text": question.text}
-            segments = {item["segment_id"]: item["text"] for item in transcript.segments}
+            layout = db.get(DocumentLayoutRevision, mapping.layout_revision_id)
+            linked_regions = set(db.scalars(select(AnswerRegionLink.region_id).where(
+                AnswerRegionLink.answer_id == answer.id, AnswerRegionLink.mapping_revision_id == mapping.id)))
+            if not layout or layout.document_id != job.document_id or not linked_regions:
+                return _failed(job_id, worker_id, "TRANSCRIPT_EVIDENCE_INVALID")
+            segments = {}
             catalog = []
             region_ids = []
             for segment in transcript.segments:
-                region_ids.append(segment["region_id"])
-                catalog.append({key: segment[key] for key in ("segment_id", "region_id", "page_index", "order", "text")})
+                region = db.get(Region, segment.get("region_id"))
+                image = db.get(PageImageRevision, region.page_image_revision_id) if region else None
+                page = db.get(Page, image.page_id) if image else None
+                segment_id, text = segment.get("segment_id"), segment.get("text")
+                if (not isinstance(segment_id, str) or not segment_id or segment_id in segments
+                        or not isinstance(text, str) or not region or region.id not in linked_regions
+                        or not image or image.id not in layout.ordered_page_image_revision_ids
+                        or not page or page.document_id != job.document_id):
+                    return _failed(job_id, worker_id, "TRANSCRIPT_EVIDENCE_INVALID")
+                segments[segment_id] = text
+                region_ids.append(region.id)
+                catalog.append({"segment_id":segment_id,"region_id":region.id,"page_index":page.page_index,
+                                "order":segment.get("order"),"text":text})
+            if not catalog:
+                return _failed(job_id, worker_id, "TRANSCRIPT_EVIDENCE_INVALID")
             expected_fingerprint = canonical_hash({
+                "prompt_version": GRADER_PROMPT_VERSION, "model_revision": MODEL_REVISION,
+                "evidence_version": GRADING_EVIDENCE_VERSION,
                 "answer_id": answer.id,
                 "transcript_revision": transcript.id,
                 "assessment_revision": revision.id,
@@ -434,9 +498,9 @@ def grade_answer(self, job_id: str) -> dict:
                 checkpoint="Qwen/Qwen3-VL-4B-Instruct",
                 checkpoint_revision=settings.model_revision,
                 runtime=qwen_adapter.runtime,
-                prompt_version="criterion-grading.v1",
+                prompt_version=GRADER_PROMPT_VERSION,
                 schema_version="grade-proposal.v1",
-                preprocessing_version="none",
+                preprocessing_version=GRADING_EVIDENCE_VERSION,
                 input_fingerprint=expected_fingerprint,
                 device="pending",
                 status="running",
@@ -556,6 +620,76 @@ def _read_region_images(db, links) -> tuple[list[dict], list[bytes], list[str]]:
     return regions, images, [json.dumps(item, sort_keys=True) for item in fingerprints]
 
 
+@celery_app.task(name="asdos.generate_rubric", bind=True, max_retries=0)
+def generate_rubric(self, job_id: str) -> dict:
+    from apps.api.asdos_api.rubric_generation import generation_fingerprint, merge_generated, replace_questions
+    from apps.api.asdos_api.services import question_json
+    lease = _begin(job_id)
+    if not lease:
+        return {"job_id": job_id, "status": "skipped"}
+    _, worker_id = lease
+    run_id = None
+    try:
+        with _heartbeat(job_id, worker_id), SessionLocal() as db:
+            job = db.get(PipelineJob, job_id)
+            revision = db.get(AssessmentRevision, job.draft_assessment_revision_id) if job else None
+            if not revision or revision.status != "draft" or revision.assessment_id != job.assessment_id:
+                return _failed(job_id, worker_id, "DRAFT_REVISION_SCOPE_REQUIRED")
+            if generation_fingerprint(db, revision) != job.input_fingerprint:
+                return _failed(job_id, worker_id, "STALE_RUBRIC_INPUT")
+            assessment = db.get(Assessment, job.assessment_id)
+            seeds = question_json(db, revision.id)
+            run = ModelRun(task_type="rubric_generation", checkpoint="Qwen/Qwen3-VL-4B-Instruct",
+                checkpoint_revision=settings.model_revision, runtime=qwen_adapter.runtime,
+                prompt_version="question-rubric.v1", schema_version="generated-rubric.v1",
+                input_fingerprint=job.input_fingerprint, status="running")
+            db.add(run)
+            db.commit()
+            run_id = run.id
+            output, provenance = qwen_adapter.generate_rubrics(seeds, assessment.language)
+            questions = merge_generated(seeds, output)
+            revision_id = revision.id
+            db.expire_all()
+            job = db.scalar(select(PipelineJob).where(PipelineJob.id == job_id).with_for_update())
+            revision = db.scalar(select(AssessmentRevision).where(AssessmentRevision.id == revision_id).with_for_update())
+            run = db.get(ModelRun, run_id)
+            if not job or job.status != "running" or job.lease_owner != worker_id:
+                run.status = "stale"
+                db.commit()
+                return {"job_id": job_id, "status": "stale_lease"}
+            if job.cancel_requested:
+                run.status = "cancelled"
+                db.commit()
+                _finish(job_id, worker_id, status="cancelled")
+                return {"job_id": job_id, "status": "cancelled"}
+            if revision.status != "draft" or generation_fingerprint(db, revision) != job.input_fingerprint:
+                run.status = "stale"
+                db.commit()
+                return _failed(job_id, worker_id, "STALE_RUBRIC_INPUT")
+            replace_questions(db, revision.id, questions)
+            revision.version += 1
+            revision.content_hash = canonical_hash(questions)
+            run.status, run.device = "succeeded", provenance.device
+            run.checkpoint_sha256 = provenance.checkpoint_sha256
+            db.add(AuditEvent(assessment_id=assessment.id, actor_id=assessment.owner_id,
+                action="assessment.rubric_generated", resource_id=revision.id,
+                metadata_json={"source": "ai_draft", "model_run_id": run.id, "version": revision.version}))
+            job.status = "succeeded"
+            job.progress_current = job.progress_total = len(questions)
+            job.finished_at = now_utc()
+            job.lease_owner = job.lease_until = None
+            db.commit()
+            return {"job_id": job_id, "status": "succeeded", "revision_version": revision.version}
+    except Exception as exc:
+        code = getattr(exc, "code", None) or "RUBRIC_GENERATION_INVALID"
+        if run_id:
+            with SessionLocal.begin() as db:
+                run = db.get(ModelRun, run_id)
+                if run:
+                    run.status, run.error_code = "failed", code
+        return _failed(job_id, worker_id, code)
+
+
 @celery_app.task(name="asdos.dispatch_outbox")
 def dispatch_outbox() -> dict:
     with SessionLocal() as db:
@@ -570,6 +704,8 @@ def dispatch_outbox() -> dict:
                 "document.process": "asdos.process_document",
                 "answer.transcribe": "asdos.transcribe_answer",
                 "answer.grade": "asdos.grade_answer",
+                "rubric.generate": "asdos.generate_rubric",
+                "document.analyze_answers": "asdos.analyze_answers",
             }.get(event.event_type)
             if not task_name:
                 event.published_at = now_utc()
@@ -623,6 +759,8 @@ def recover_expired_jobs() -> dict:
                 "question_import": "document.process",
                 "transcribe_answer": "answer.transcribe",
                 "grade_answer": "answer.grade",
+                "rubric_generate": "rubric.generate",
+                "analyze_answers": "document.analyze_answers",
             }.get(job.kind)
             if not event_type:
                 continue

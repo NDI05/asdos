@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -28,6 +30,7 @@ from .models import (
     Page,
     PageImageRevision,
     PipelineJob,
+    QuestionRevision,
     Region,
     ReviewItem,
     ReviewRevision,
@@ -46,9 +49,12 @@ from .schemas import (
 )
 from .services import add_job, canonical_hash, publish_job_outbox
 from .storage import artifact_store
-from .model_adapters import model_status
+from .model_adapters import GRADER_PROMPT_VERSION, GRADING_EVIDENCE_VERSION, MODEL_REVISION, model_status, transcription_flags, transcriber_fingerprint
+from apps.worker.render_pdf import RENDER_POLICY_VERSION
 
 router = APIRouter(prefix="/api/v1", tags=["submissions"])
+PENDING_ID_PREFIX = "__asdos_pending__"
+logger = logging.getLogger(__name__)
 
 
 def _submission_scope(db: Session, actor, submission_id: str, *, lock: bool = False) -> tuple[Submission, Assessment]:
@@ -81,28 +87,60 @@ async def _store_pdf(upload: UploadFile) -> tuple[str, str, int]:
 def _job_fingerprint(document_id: str, sha256: str, *, scope_revision_id: str | None = None) -> str:
     return canonical_hash({"document_id": document_id, "scope_revision_id": scope_revision_id,
                            "sha256": sha256, "stage": "pdfium-render", "dpi": settings.render_dpi,
-                           "max_pixels": settings.max_render_pixels, "renderer": "pypdfium2"})
+                           "max_pixels": settings.max_render_pixels, "renderer": "pypdfium2",
+                           "render_policy": RENDER_POLICY_VERSION})
+
+
+def _job_summary(job: PipelineJob) -> dict:
+    return {"id": job.id, "kind": job.kind, "stage": job.stage, "status": job.status,
+            "answer_id": job.answer_id, "document_id": job.document_id, "attempt": job.attempt,
+            "progress": {"completed": job.progress_current, "total": job.progress_total,
+                         "unit": ("pages" if job.kind in {"document_render", "question_import"} or
+                                  (job.kind == "analyze_answers" and job.stage == "locate_answers")
+                                  else "regions" if job.kind == "analyze_answers" else "answers")},
+            "error_code": job.error_code, "retryable": job.status == "failed" and job.attempt < 3,
+            "cancel_requested": job.cancel_requested, "created_at": job.created_at.isoformat(),
+            "finished_at": job.finished_at.isoformat() if job.finished_at else None}
 
 
 @router.get("/assessments/{assessment_id}/submissions")
 def list_submissions(assessment_id: str, db: Session = Depends(get_db), actor=Depends(require_actor)):
     assessment = require_owner_scope(db, actor, assessment_id)
     rows = db.scalars(select(Submission).where(Submission.assessment_id == assessment.id).order_by(Submission.created_at.desc())).all()
+    submission_ids = [row.id for row in rows]
+    answer_counts = dict(db.execute(select(Answer.submission_id,func.count(Answer.id)).where(
+        Answer.submission_id.in_(submission_ids)).group_by(Answer.submission_id)).all()) if submission_ids else {}
+    document_ids = [row.active_document_id for row in rows if row.active_document_id]
+    latest_jobs = {}
+    if document_ids:
+        for job in db.scalars(select(PipelineJob).where(PipelineJob.document_id.in_(document_ids),
+                PipelineJob.kind.in_(['document_render','analyze_answers','grade_answer'])).order_by(PipelineJob.created_at.desc(),PipelineJob.attempt.desc())):
+            latest_jobs.setdefault((job.document_id,job.kind,job.answer_id),job)
     result = []
     for submission in rows:
         document = db.get(Document, submission.active_document_id) if submission.active_document_id else None
         from .models import GradeSnapshot
         final_snapshot = db.scalar(select(GradeSnapshot).where(GradeSnapshot.submission_id == submission.id).order_by(GradeSnapshot.approved_at.desc()).limit(1))
+        grades = [job for (doc_id,kind,_),job in latest_jobs.items() if document and doc_id == document.id and kind == 'grade_answer']
+        analysis = latest_jobs.get((document.id,'analyze_answers',None)) if document else None
+        active_grade = next((job for job in grades if job.status in ('queued','running')),None)
+        processing = (analysis if analysis and analysis.status in ('queued','running','failed') else active_grade or analysis
+                      or (latest_jobs.get((document.id,'document_render',None)) if document else None))
         result.append({
             "id": submission.id,
             "external_student_id": submission.external_student_id if submission.identity_status == "confirmed" else "",
             "display_name": submission.display_name if submission.identity_status == "confirmed" else "Belum dikonfirmasi",
             "attempt_no": submission.attempt_no,
             "identity_status": submission.identity_status,
+            "identity_candidate": ((document.analysis_result or {}).get('identity_candidate') if document and submission.identity_status != 'confirmed' else None),
             "status": submission.status,
             "document_id": document.id if document else None,
             "page_count": document.page_count if document else 0,
             "document_status": document.validation_status if document else "missing",
+            "document_filename": document.original_filename if document else None,
+            "processing": _job_summary(processing) if processing else None,
+            "grade_progress": {"succeeded":sum(job.status=='succeeded' for job in grades),"failed":sum(job.status=='failed' for job in grades),
+                               "scheduled":len(grades),"total":answer_counts.get(submission.id,0)},
             "final_score": str(final_snapshot.final_score) if final_snapshot else None,
             "created_at": submission.created_at.isoformat(),
         })
@@ -152,10 +190,19 @@ def create_submission(assessment_id: str, body: SubmissionCreate, db: Session = 
             "status": submission.status, "version": submission.version}
 
 
+@router.post("/assessments/{assessment_id}/submissions/unidentified", status_code=201)
+def create_unidentified_submission(assessment_id: str, db: Session = Depends(get_db), actor=Depends(require_writer)):
+    """Reserve a distinct submission without claiming a student's identity."""
+    return create_submission(assessment_id, SubmissionCreate(
+        external_student_id=PENDING_ID_PREFIX + uuid4().hex, display_name="Belum dikonfirmasi"), db, actor)
+
+
 @router.post("/submissions/{submission_id}/documents", status_code=202)
 async def upload_submission_pdf(
     submission_id: str,
     file: UploadFile = File(...),
+    auto_process: bool = Form(True),
+    auto_grade: bool = Form(False),
     db: Session = Depends(get_db),
     actor=Depends(require_writer),
 ):
@@ -170,6 +217,8 @@ async def upload_submission_pdf(
         sha256=digest,
         byte_size=size,
         validation_status="pending",
+        auto_process=auto_process,
+        analysis_result={"auto_grade_requested": bool(auto_grade and auto_process)},
     )
     db.add(document)
     db.flush()
@@ -310,6 +359,8 @@ def get_document_content(document_id: str, db: Session = Depends(get_db), actor=
 
 @router.post("/submissions/{submission_id}/confirm-identity")
 def confirm_identity(submission_id: str, body: IdentityConfirmationInput, db: Session = Depends(get_db), actor=Depends(require_writer)):
+    if body.external_student_id.startswith(PENDING_ID_PREFIX):
+        raise HTTPException(status_code=422, detail={"code":"INVALID_STUDENT_ID"})
     submission, assessment = _submission_scope(db, actor, submission_id, lock=True)
     if submission.version != body.expected_submission_version:
         raise HTTPException(status_code=409, detail={"code": "STALE_SUBMISSION", "current_version": submission.version})
@@ -350,6 +401,7 @@ def confirm_identity(submission_id: str, body: IdentityConfirmationInput, db: Se
         metadata_json={"document_id": document.id, "document_hash": document.sha256},
     ))
     db.commit()
+    _enqueue_automatic_grades(db, submission.id, actor)
     return {"identity_status": submission.identity_status, "external_student_id": submission.external_student_id,
             "display_name": submission.display_name, "document_id": document.id,
             "document_hash": document.sha256, "version": submission.version}
@@ -379,7 +431,8 @@ def get_submission(submission_id: str, db: Session = Depends(get_db), actor=Depe
                 "transform": image_revision.transform,
                 "inverse_transform": image_revision.inverse_transform,
                 "image_url": f"/api/v1/page-image-revisions/{image_revision.id}/content",
-                "regions": [{"id": region.id, "polygon": region.polygon, "region_type": region.region_type} for region in regions],
+                "regions": [{"id": region.id, "polygon": region.polygon, "region_type": region.region_type,
+                             "analysis":region.analysis,"excluded_from_mapping":region.excluded_from_mapping} for region in regions],
             })
     from .services import question_json
     questions = {item["stable_question_id"]: item for item in question_json(db, revision.id)} if revision else {}
@@ -393,9 +446,10 @@ def get_submission(submission_id: str, db: Session = Depends(get_db), actor=Depe
             AnswerRegionLink.mapping_revision_id == mapping.id if mapping else False,
         ).order_by(AnswerRegionLink.order_index)).all() if mapping else []
         transcript = db.get(TranscriptionRevision, answer.active_transcription_revision_id) if answer.active_transcription_revision_id else None
-        transcript_is_current = bool(transcript and mapping and transcript.mapping_revision_id == mapping.id)
+        mapping_is_current = bool(mapping and document and mapping.layout_revision_id == document.active_layout_revision_id)
+        transcript_is_current = bool(transcript and mapping_is_current and transcript.mapping_revision_id == mapping.id)
         proposal = db.get(GradeProposal, answer.active_proposal_id) if answer.active_proposal_id else None
-        proposal_is_current = bool(proposal and transcript and proposal.transcription_revision_id == transcript.id and revision and proposal.assessment_revision_id == revision.id)
+        proposal_is_current = bool(proposal and transcript_is_current and proposal.transcription_revision_id == transcript.id and revision and proposal.assessment_revision_id == revision.id)
         review = db.get(ReviewRevision, submission.active_review_id) if submission.active_review_id else None
         review_item = db.scalar(select(ReviewItem).where(
             ReviewItem.review_revision_id == review.id,
@@ -408,11 +462,12 @@ def get_submission(submission_id: str, db: Session = Depends(get_db), actor=Depe
             "text": question.get("text", ""),
             "weight": question.get("weight"),
             "rubric": question.get("criteria", []),
-            "mapping_status": answer.mapping_status,
-            "mapping_revision_id": mapping.id if mapping else None,
-            "region_ids": [link.region_id for link in links],
+            "mapping_status": answer.mapping_status if mapping_is_current else "unmapped",
+            "mapping_revision_id": mapping.id if mapping_is_current else None,
+            "region_ids": [link.region_id for link in links] if mapping_is_current else [],
             "transcript_status": answer.transcript_status,
             "transcript": transcript.literal_text if transcript and transcript_is_current else "",
+            "transcript_flags": transcript.flags if transcript and transcript_is_current else [],
             "transcript_revision_id": transcript.id if transcript else None,
             "transcript_revision_no": transcript.revision_no if transcript else 0,
             "transcript_stale": bool(transcript and not transcript_is_current),
@@ -430,6 +485,13 @@ def get_submission(submission_id: str, db: Session = Depends(get_db), actor=Depe
     from .models import GradeSnapshot
     final = db.scalar(select(GradeSnapshot).where(GradeSnapshot.submission_id == submission.id).order_by(GradeSnapshot.approved_at.desc()).limit(1))
     confirmation = db.get(IdentityConfirmation, submission.active_identity_confirmation_id) if submission.active_identity_confirmation_id else None
+    latest_jobs = {}
+    if document:
+        jobs = db.scalars(select(PipelineJob).where(
+            PipelineJob.submission_id == submission.id, PipelineJob.document_id == document.id,
+        ).order_by(PipelineJob.created_at.desc(), PipelineJob.attempt.desc())).all()
+        for item in jobs:
+            latest_jobs.setdefault((item.kind, item.answer_id), _job_summary(item))
     return {
         "id": submission.id,
         "assessment_id": assessment.id,
@@ -437,14 +499,24 @@ def get_submission(submission_id: str, db: Session = Depends(get_db), actor=Depe
         "assessment_revision_status": revision.status if revision else None,
         "external_student_id": submission.external_student_id if submission.identity_status == "confirmed" else "",
         "display_name": submission.display_name if submission.identity_status == "confirmed" else "",
+        "claimed_identity": ({"external_student_id":((document.analysis_result or {}).get('identity_candidate') or {}).get('student_id') or "", "display_name":((document.analysis_result or {}).get('identity_candidate') or {}).get('name') or ""}
+            if document and submission.external_student_id.startswith(PENDING_ID_PREFIX)
+            else {"external_student_id":"", "display_name":""}
+            if submission.external_student_id.startswith(PENDING_ID_PREFIX)
+            else {"external_student_id": submission.external_student_id, "display_name": submission.display_name}),
         "attempt_no": submission.attempt_no,
         "identity_status": submission.identity_status,
         "identity_confirmation_id": confirmation.id if confirmation else None,
         "document": ({"id": document.id, "sha256": document.sha256, "status": document.validation_status,
                       "page_count": document.page_count, "layout_revision_id": document.active_layout_revision_id,
+                      "auto_process":document.auto_process,"analysis_result":document.analysis_result,
                       "original_url": f"/api/v1/documents/{document.id}/content"} if document else None),
         "pages": pages,
         "answers": items,
+        "pipeline_jobs": list(latest_jobs.values()),
+        "unassigned_region_ids": [r["id"] for p in pages for r in p["regions"]
+            if r["region_type"] in {"answer","unassigned"} and not r["excluded_from_mapping"]
+            and r["id"] not in {rid for item in items for rid in item["region_ids"]}],
         "review_revision": ({"id": review.id, "sequence": review.sequence, "version": review.version, "status": review.status} if review else None),
         "final_snapshot": ({"id": final.id, "score": str(final.final_score), "revision_id": final.assessment_revision_id,
                             "approved_at": final.approved_at.isoformat()} if final else None),
@@ -613,12 +685,14 @@ def map_answer(answer_id: str, body: MappingInput, db: Session = Depends(get_db)
         raise HTTPException(status_code=409, detail={"code": "DOCUMENT_LAYOUT_PENDING"})
     if answer.transcript_revision != body.expected_transcript_revision:
         raise HTTPException(status_code=409, detail={"code": "STALE_TRANSCRIPTION", "current_revision": answer.transcript_revision})
-    if answer.active_mapping_revision_id != body.expected_mapping_revision_id:
+    from .auto_mapping import current_mapping
+    existing_mapping = current_mapping(db,submission,answer)
+    if (existing_mapping.id if existing_mapping else None) != body.expected_mapping_revision_id:
         raise HTTPException(status_code=409, detail={"code": "STALE_MAPPING", "current_mapping_revision_id": answer.active_mapping_revision_id})
     if len(set(body.region_ids)) != len(body.region_ids):
         raise HTTPException(status_code=422, detail={"code": "DUPLICATE_REGION_ID"})
     regions = [db.get(Region, region_id) for region_id in body.region_ids]
-    if any(region is None or region.region_type != "answer" for region in regions):
+    if any(region is None or region.region_type != "answer" or region.excluded_from_mapping for region in regions):
         raise HTTPException(status_code=422, detail={"code": "INVALID_ANSWER_REGION"})
     for region in regions:
         page_revision = db.get(PageImageRevision, region.page_image_revision_id)
@@ -648,9 +722,11 @@ def map_answer(answer_id: str, body: MappingInput, db: Session = Depends(get_db)
         db.add(AnswerRegionLink(answer_id=answer.id, mapping_revision_id=mapping.id, region_id=region_id, order_index=order))
     previous = answer.active_mapping_revision_id
     answer.active_mapping_revision_id = mapping.id
-    answer.mapping_status = "mapped"
+    answer.mapping_status = "mapped" if regions else "unmapped"
     if answer.transcript_status == "transcribed":
         answer.transcript_status = "pending"
+    from .auto_mapping import adopt_region_transcripts
+    reused_ocr = adopt_region_transcripts(db,answer,mapping,regions)
     submission.status = "needs_review"
     db.add(AuditEvent(
         assessment_id=assessment.id,
@@ -662,8 +738,10 @@ def map_answer(answer_id: str, body: MappingInput, db: Session = Depends(get_db)
         metadata_json={"regions": list(body.region_ids), "layout_revision_id": layout.id},
     ))
     db.commit()
+    if reused_ocr:
+        _enqueue_automatic_grades(db, submission.id, actor)
     return {"answer_id": answer.id, "mapping_revision_id": mapping.id, "sequence": mapping.sequence,
-            "region_ids": body.region_ids, "status": "mapped"}
+            "region_ids": body.region_ids, "status":answer.mapping_status,"reused_ocr":reused_ocr}
 
 
 @router.post("/submissions/{submission_id}/answers/{question_id}/transcription-revisions", status_code=201)
@@ -684,8 +762,9 @@ def save_transcription(
         raise HTTPException(status_code=409, detail={"code": "IDENTITY_AND_DOCUMENT_REQUIRED"})
     if body.status == "verified_blank" and (body.literal_text or not body.reason or not body.reason.strip()):
         raise HTTPException(status_code=422, detail={"code": "VERIFIED_BLANK_REQUIRES_EMPTY_TEXT_AND_REASON"})
-    mapping = db.get(AnswerMappingRevision, answer.active_mapping_revision_id) if answer.active_mapping_revision_id else None
-    if body.status in {"transcribed", "unreadable", "unsupported"} and not mapping:
+    from .auto_mapping import current_mapping
+    mapping = current_mapping(db,submission,answer)
+    if body.status in {"transcribed", "unreadable", "unsupported"} and (not mapping or answer.mapping_status == "unmapped"):
         raise HTTPException(status_code=409, detail={"code": "ANSWER_MAPPING_REQUIRED"})
     if body.status == "transcribed" and not body.literal_text.strip():
         raise HTTPException(status_code=422, detail={"code": "TRANSCRIPTION_TEXT_REQUIRED"})
@@ -737,6 +816,8 @@ def save_transcription(
         metadata_json={"status": body.status, "source": "human"},
     ))
     db.commit()
+    if body.status == 'transcribed':
+        _enqueue_automatic_grades(db, submission.id, actor)
     return {"id": transcript.id, "revision_no": transcript.revision_no, "status": transcript.status,
             "literal_text": transcript.literal_text, "segments": transcript.segments,
             "mapping_revision_id": transcript.mapping_revision_id}
@@ -750,11 +831,16 @@ def request_transcription(submission_id: str, question_id: str, db: Session = De
     answer = db.scalar(select(Answer).where(Answer.submission_id == submission.id, Answer.stable_question_id == question_id).with_for_update())
     if not answer or not answer.active_mapping_revision_id:
         raise HTTPException(status_code=409, detail={"code": "ANSWER_MAPPING_REQUIRED"})
-    mapping = db.get(AnswerMappingRevision, answer.active_mapping_revision_id)
+    from .auto_mapping import current_mapping
+    mapping = current_mapping(db,submission,answer)
+    if not mapping:
+        raise HTTPException(409,detail={"code":"ANSWER_MAPPING_REQUIRED"})
     links = db.scalars(select(AnswerRegionLink).where(
         AnswerRegionLink.answer_id == answer.id,
         AnswerRegionLink.mapping_revision_id == mapping.id,
     ).order_by(AnswerRegionLink.order_index)).all()
+    if not links:
+        raise HTTPException(409, detail={"code": "ANSWER_MAPPING_REQUIRED"})
     regions_fingerprint = []
     for link in links:
         region = db.get(Region, link.region_id)
@@ -762,7 +848,8 @@ def request_transcription(submission_id: str, question_id: str, db: Session = De
         regions_fingerprint.append(json.dumps({"region_id": region.id, "page_image_hash": page_image.image_sha256,
                                                "polygon": region.polygon}, sort_keys=True))
     fingerprint = canonical_hash({"document": submission.active_document_id, "answer": answer.id,
-                                  "regions": regions_fingerprint, "language": assessment.language})
+                                  "regions": regions_fingerprint, "language": assessment.language,
+                                  "transcriber": transcriber_fingerprint()})
     job = add_job(
         db,
         assessment_id=assessment.id,
@@ -790,13 +877,22 @@ def request_grade_proposal(submission_id: str, question_id: str, db: Session = D
     answer = db.scalar(select(Answer).where(Answer.submission_id == submission.id,
         Answer.stable_question_id == question_id).with_for_update())
     transcript = db.get(TranscriptionRevision, answer.active_transcription_revision_id) if answer and answer.active_transcription_revision_id else None
+    if answer and answer.mapping_status == "auto_mapped":
+        raise HTTPException(409,detail={"code":"AUTO_MAPPING_REVIEW_REQUIRED"})
+    from .auto_mapping import current_mapping
+    if not current_mapping(db,submission,answer) or answer.mapping_status == "unmapped":
+        raise HTTPException(409,detail={"code":"ANSWER_MAPPING_REQUIRED"})
     if not answer or not transcript or transcript.status != "transcribed" or transcript.mapping_revision_id != answer.active_mapping_revision_id:
         raise HTTPException(status_code=409, detail={"code": "CURRENT_TRANSCRIPTION_REQUIRED"})
+    if transcript.flags or transcription_flags(transcript.literal_text):
+        raise HTTPException(status_code=409, detail={"code": "UNREADABLE_TRANSCRIPTION_REVIEW_REQUIRED"})
     question = db.scalar(select(QuestionRevision).where(
         QuestionRevision.assessment_revision_id == revision.id,
         QuestionRevision.stable_question_id == answer.stable_question_id,
     ))
-    fingerprint = canonical_hash({"answer_id": answer.id, "transcript_revision": transcript.id,
+    fingerprint = canonical_hash({"prompt_version": GRADER_PROMPT_VERSION, "model_revision": MODEL_REVISION,
+                                  "evidence_version": GRADING_EVIDENCE_VERSION,
+                                  "answer_id": answer.id, "transcript_revision": transcript.id,
                                   "assessment_revision": revision.id, "question_id": question.id})
     job = add_job(
         db,
@@ -813,18 +909,30 @@ def request_grade_proposal(submission_id: str, question_id: str, db: Session = D
     return {"job_id": job.id, "status": job.status, "error_code": job.error_code, "model": model_status()}
 
 
+def _enqueue_automatic_grades(db: Session, submission_id: str, actor) -> None:
+    """Schedule draft proposals only after identity and per-answer mapping are reviewed."""
+    submission = db.get(Submission, submission_id)
+    document = db.get(Document, submission.active_document_id) if submission and submission.active_document_id else None
+    if not document or submission.identity_status != 'confirmed' or not (document.analysis_result or {}).get('auto_grade_requested'):
+        return
+    question_ids = list(db.scalars(select(Answer.stable_question_id).where(Answer.submission_id == submission_id)))
+    for question_id in question_ids:
+        try:
+            request_grade_proposal(submission_id, question_id, db, actor)
+        except HTTPException:
+            db.rollback()  # A missing/review-pending answer remains for the lecturer.
+        except Exception:
+            db.rollback()
+            logger.warning('Automatic grading could not be scheduled; manual retry remains available.')
+
+
 @router.get("/jobs/{job_id}")
 def get_job(job_id: str, db: Session = Depends(get_db), actor=Depends(require_actor)):
     job = db.get(PipelineJob, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"code": "RESOURCE_NOT_FOUND"})
     require_owner_scope(db, actor, job.assessment_id)
-    return {"id": job.id, "kind": job.kind, "stage": job.stage, "status": job.status,
-            "attempt": job.attempt, "progress": {"completed": job.progress_current, "total": job.progress_total,
-            "unit": "pages" if job.kind in {"document_render", "question_import"} else "answers"},
-            "error_code": job.error_code, "retryable": job.status == "failed" and job.attempt < 3,
-            "cancel_requested": job.cancel_requested, "created_at": job.created_at.isoformat(),
-            "finished_at": job.finished_at.isoformat() if job.finished_at else None}
+    return _job_summary(job)
 
 
 @router.post("/jobs/{job_id}/cancel", status_code=202)

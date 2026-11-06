@@ -17,7 +17,7 @@ from .models import (
     Submission,
     now_utc,
 )
-from .schemas import AssessmentCreate, QuestionSet, RevisionCreate, RevisionExpectation
+from .schemas import AssessmentCreate, QuestionSet, RevisionCreate, RevisionExpectation, GenerateRubricRequest
 from .services import canonical_hash, question_json, validate_question_payload
 
 router = APIRouter(prefix="/api/v1", tags=["assessments"])
@@ -196,6 +196,49 @@ def save_questions(revision_id: str, body: QuestionSet, db: Session = Depends(ge
     return {"id": revision.id, "version": revision.version, "status": revision.status, "questions": question_json(db, revision.id)}
 
 
+@router.put("/assessment-revisions/{revision_id}/question-seeds")
+def save_question_seeds(revision_id: str, body: "GenerateRubricRequest", db: Session = Depends(get_db), actor=Depends(require_writer)):
+    from .rubric_generation import save_seeds
+    revision = db.scalar(select(AssessmentRevision).where(AssessmentRevision.id == revision_id).with_for_update())
+    if not revision:
+        raise HTTPException(404, detail={"code": "RESOURCE_NOT_FOUND"})
+    require_owner_scope(db, actor, revision.assessment_id)
+    if revision.status != "draft" or revision.version != body.expected_version:
+        raise HTTPException(409, detail={"code": "STALE_OR_APPROVED_REVISION"})
+    save_seeds(db, revision, body.questions)
+    db.add(AuditEvent(assessment_id=revision.assessment_id, actor_id=actor.id,
+        action="assessment.questions_saved", resource_id=revision.id,
+        metadata_json={"version": revision.version, "question_count": len(body.questions)}))
+    db.commit()
+    return {"id": revision.id, "version": revision.version, "status": revision.status,
+            "questions": question_json(db, revision.id)}
+
+
+@router.post("/assessment-revisions/{revision_id}/generate-rubric", status_code=202)
+def request_generated_rubric(revision_id: str, body: "GenerateRubricRequest", db: Session = Depends(get_db), actor=Depends(require_writer)):
+    from .model_adapters import model_status
+    from .rubric_generation import save_seeds, generation_fingerprint
+    from .services import add_job, publish_job_outbox
+    revision = db.scalar(select(AssessmentRevision).where(AssessmentRevision.id == revision_id).with_for_update())
+    if not revision:
+        raise HTTPException(404, detail={"code": "RESOURCE_NOT_FOUND"})
+    require_owner_scope(db, actor, revision.assessment_id)
+    if revision.status != "draft" or revision.version != body.expected_version:
+        raise HTTPException(409, detail={"code": "STALE_OR_APPROVED_REVISION"})
+    if not model_status()["available"]:
+        raise HTTPException(503, detail={"code": "MODEL_UNAVAILABLE"})
+    save_seeds(db, revision, body.questions)
+    job = add_job(db, assessment_id=revision.assessment_id, document_id=None,
+        draft_assessment_revision_id=revision.id, kind="rubric_generate",
+        input_fingerprint=generation_fingerprint(db, revision))
+    db.commit()
+    publish_job_outbox(db, job.id)
+    db.refresh(job)
+    db.refresh(revision)
+    return {"job_id": job.id, "status": job.status, "error_code": job.error_code,
+            "revision_version": revision.version}
+
+
 @router.post("/assessment-revisions/{revision_id}/approve")
 def approve_revision(revision_id: str, body: RevisionExpectation, db: Session = Depends(get_db), actor=Depends(require_writer)):
     revision = db.scalar(select(AssessmentRevision).where(AssessmentRevision.id == revision_id).with_for_update())
@@ -211,6 +254,9 @@ def approve_revision(revision_id: str, body: RevisionExpectation, db: Session = 
     rows = db.scalars(select(QuestionRevision).where(QuestionRevision.assessment_revision_id == revision.id).order_by(QuestionRevision.order_index)).all()
     if not rows:
         raise HTTPException(status_code=409, detail={"code": "QUESTIONS_REQUIRED"})
+    if any(not row.reference_answer.strip() or not db.scalar(select(RubricCriterion.id).where(
+            RubricCriterion.question_revision_id == row.id).limit(1)) for row in rows):
+        raise HTTPException(status_code=409, detail={"code": "RUBRIC_INCOMPLETE"})
     specs = validate_question_payload(_as_input_questions(db, revision.id))
     if len(specs) != len(rows) or any(question.max_raw <= 0 for question in specs):
         raise HTTPException(status_code=409, detail={"code": "RUBRIC_INCOMPLETE"})

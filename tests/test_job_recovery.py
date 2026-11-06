@@ -90,6 +90,17 @@ class TestJobRecovery(unittest.TestCase):
         self.assertIsNone(job.lease_owner)
         self.assertEqual(len(events), 1)
 
+    def test_automatic_answer_analysis_is_recoverable_through_outbox(self):
+        job_id=self.add_job(status="queued")
+        with self.sessions.begin() as db:
+            job=db.get(PipelineJob,job_id)
+            job.kind,job.stage="analyze_answers","locate_answers"
+        result=tasks.recover_expired_jobs.run()
+        self.assertEqual(result["requeued"],1)
+        with self.sessions() as db:
+            event=db.scalar(select(OutboxEvent).where(OutboxEvent.job_id==job_id))
+            self.assertEqual(event.event_type,"document.analyze_answers")
+
     def test_live_lease_is_not_recovered(self):
         job_id = self.add_job(status="running", lease_until=now_utc() + timedelta(minutes=5))
         result = tasks.recover_expired_jobs.run()

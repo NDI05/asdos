@@ -2,15 +2,15 @@
 
 ## Identitas dan lisensi
 
-ASDOS adalah nama kerja; maintainer memeriksa nama repository, merek, dan deskripsi publik sebelum peluncuran. Deskripsi awal: “Asisten koreksi jawaban tulisan tangan dengan rubrik berbobot, bukti visual, review dosen, dan ekspor Excel.” Jangan menjanjikan penilaian otomatis sempurna atau menyebut kemampuan yang belum melewati benchmark.
+ASDOS adalah nama proyek yang dipakai pada repository publik. Deskripsi proyek: “Asisten koreksi jawaban tulisan tangan dengan rubrik berbobot, bukti visual, review dosen, dan ekspor Excel.” Jangan menjanjikan penilaian otomatis sempurna atau menyebut kemampuan yang belum melewati benchmark.
 
-Usulan lisensi kode/dokumentasi proyek: Apache-2.0 karena izin penggunaan/modifikasi/distribusi dan ketentuan patent grant yang eksplisit. Keputusan akhir pemegang hak belum diambil. Sebelum publikasi: pastikan kepemilikan kontribusi, tambahkan teks LICENSE resmi lengkap, pernyataan hak cipta yang benar, dan NOTICE bila diwajibkan dependensi. Paket perencanaan ini tidak mengklaim bahwa repository sudah berlisensi Apache-2.0.
+Kode dan dokumentasi proyek dilisensikan dengan Apache-2.0. Berkas `LICENSE` memuat teks resmi dan pemegang hak proyek. Lisensi ini hanya mencakup karya kode/dokumentasi ASDOS yang dimaksud, bukan data mahasiswa, checkpoint privat, atau perangkat lunak pihak ketiga. Repository tidak membundel bobot model.
 
 ## Pisahkan empat jenis hak
 
 | Artefak | Kebijakan |
 | --- | --- |
-| Kode aplikasi | Lisensi proyek setelah disetujui |
+| Kode aplikasi | Apache-2.0; lihat `LICENSE` |
 | Bobot model | Lisensi checkpoint masing-masing; verifikasi revision aktual |
 | Dataset/scan mahasiswa | Izin/data policy tersendiri; tidak ikut lisensi kode |
 | Hasil penilaian/ekspor | Data pemilik instalasi, bukan otomatis materi publik |
@@ -23,17 +23,17 @@ Versi/distribusi Redis juga harus melalui pemeriksaan lisensi tersendiri (S14), 
 
 Pemilik awal proyek menjadi maintainer; domain reviewer untuk rubrik/penilaian dapat dosen pendamping. Perubahan rumus nilai, finalisasi, dan default evaluator memerlukan review domain dan engineering. Perubahan lisensi, pengiriman data eksternal, serta cakupan klaim model dicatat sebagai keputusan baru.
 
-Gunakan issue template bug/feature/model regression dan PR template sederhana setelah repo publik tersedia. Label awal: `area:vision`, `area:grading`, `area:export`, `area:security`, `type:bug`, `type:docs`, `good-first-issue`, dan `milestone:m0`–`m6`. Ini rencana label; belum ada issue/PR yang dibuat.
+Tambahkan issue template bug/feature/model regression dan PR template saat alur kontribusi publik mulai dipakai. Label yang disarankan: `area:vision`, `area:grading`, `area:export`, `area:security`, `type:bug`, `type:docs`, `good-first-issue`, dan `milestone:m0`–`m6`. DCO/sign-off dan CLA tidak diberlakukan saat ini; maintainer dapat menetapkan kebijakan baru sebelum menerimanya di kemudian hari.
 
 ## Kontribusi dan komunitas
 
-Baca [CONTRIBUTING.md](../CONTRIBUTING.md). Kontributor menyatakan hak atas kontribusinya dan mengikuti kebijakan DCO yang diputuskan sebelum menerima PR eksternal. Tambahkan kode perilaku dan kontak moderator sebelum mengundang komunitas luas; jangan mencantumkan alamat/email yang belum dikonfirmasi.
+Baca [CONTRIBUTING.md](../CONTRIBUTING.md). Kontributor menyatakan memiliki hak atas kontribusinya dan menyerahkannya di bawah Apache-2.0. Tambahkan kode perilaku dan kontak moderator sebelum mengundang komunitas luas; jangan mencantumkan alamat/email yang belum dikonfirmasi.
 
 Good first issues cocok untuk dokumentasi, fixture sintetik, layout workbook, dan UX yang tidak mengubah keputusan nilai. Perubahan parser, scoring, dan otorisasi butuh konteks serta reviewer yang sesuai. Demo publik memakai data sintetik; jangan meminta pengguna mengunggah ujian nyata ke layanan demo terbuka.
 
 ## Artefak rilis
 
-Rilis memuat source, lockfile, petunjuk setup yang sudah diuji, contoh konfigurasi tanpa secret, schema API, migrasi, model manifest/checksum, daftar dependency/lisensi atau SBOM, model card, known issues, dan laporan gate. Bobot model tidak perlu dibundel dalam repository; provisioning harus eksplisit, dapat diverifikasi, dan menyebut kebutuhan ruang/perangkat.
+Repository publik memuat source, lockfile, contoh konfigurasi tanpa secret, schema API, migrasi, manifest model pralatih, known issues, dan laporan gate. Checkpoint Qwen diunduh saat provisioning; TrOCR eksperimen/dataset tetap privat dan tidak didistribusikan. Instruksi setup menyebut kebutuhan jaringan dan perangkat.
 
 Dataset publik opsional harus melalui review izin dan redaksi tersendiri. Benchmark privat dapat dipublikasikan sebagai agregat, manifest tanpa PII, dan contoh sintetik yang merepresentasikan failure mode; jangan membuka hash/NIM yang dapat dikaitkan tanpa pertimbangan konteks data.
 

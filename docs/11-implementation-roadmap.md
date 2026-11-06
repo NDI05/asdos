@@ -10,6 +10,8 @@ Estimasi untuk satu pengembang berpengalaman: **194–296 jam kerja teknis**, at
 
 Implementasi source untuk jalur M1–M5 tersedia sebagai satu potongan MVP: API/domain, skema/migrasi, UI, worker, adapter model lokal, finalisasi dan Excel. Pada environment lokal, dependency Python/web sudah terkunci, 10 tes termasuk E2E API manual sintetis lulus, build web dan migrasi lulus, serta server native API/UI sedang berjalan. Enam layanan Compose juga sempat dibangun dan di-health-check; Compose kini dihentikan dan network dikembalikan ke `internal` setelah ingress terbukti memberi API egress internet dan tidak bisa diblokir dengan opsi masquerading pada host ini. Bukti ini mendukung jalur manual dasar M1 dan sebagian intake/review/export; belum membuktikan semua acceptance M1–M5. M0 dan M6 tetap terbuka: belum ada tulisan tangan nyata, evaluasi model, uji recovery penuh, security/restore drill, pilot, atau release readiness. Bukti aktual dicatat di [TEST_REPORT.md](../TEST_REPORT.md), dan rincian source/gate di [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md).
 
+**Pembaruan 5 November 2026:** adapter transcriber lokal TrOCR eksperimental telah ditambahkan dan checkpoint hasil training privat dapat dipilih lewat `ASDOS_TRANSCRIBER=trocr`. Perubahan ini tidak menutup gate M0/M3: label training berasal dari AI, belum ada evaluasi gold/held-out, dan klaim generalisasi belum tersedia. Qwen tetap menangani lokalisasi serta tugas VLM lain. Lihat [catatan integrasi TrOCR](implementation/TROCR_INTEGRATION_2026-11-05.md).
+
 ## Milestone
 
 | Milestone | Jam | Dependensi | Keluaran dan gate |

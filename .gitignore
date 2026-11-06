@@ -28,3 +28,6 @@ core
 core.*
 
 !examples/*.xlsx
+
+# Private student scans and all derived annotations
+/dataset/

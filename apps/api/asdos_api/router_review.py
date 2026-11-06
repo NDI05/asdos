@@ -19,6 +19,7 @@ from .models import (
 )
 from .schemas import FinalizeRequest, ReviewItemInput
 from .services import canonical_hash, load_question_specs
+from .model_adapters import transcription_flags
 
 router = APIRouter(prefix="/api/v1", tags=["review"])
 
@@ -95,6 +96,8 @@ def _valid_evidence(db: Session, answer: Answer | None, criteria: list[dict]) ->
     if not answer:
         return []
     transcript = db.get(TranscriptionRevision, answer.active_transcription_revision_id) if answer.active_transcription_revision_id else None
+    if transcript and (transcript.status == "unreadable" or transcript.flags or transcription_flags(transcript.literal_text)):
+        raise HTTPException(status_code=409, detail={"code": "UNREADABLE_TRANSCRIPTION_REVIEW_REQUIRED"})
     mapping_id = answer.active_mapping_revision_id
     if not transcript or transcript.mapping_revision_id != mapping_id:
         if any(Decimal(str(value["credit"])) > 0 for criterion in criteria for value in [criterion]):
@@ -155,6 +158,12 @@ def save_review_item(submission_id: str, question_id: str, body: ReviewItemInput
         Answer.stable_question_id == question_id).with_for_update())
     if not answer:
         raise HTTPException(status_code=409, detail={"code": "ANSWER_RECORD_MISSING"})
+    if answer.mapping_status == "auto_mapped":
+        raise HTTPException(409,detail={"code":"AUTO_MAPPING_REVIEW_REQUIRED"})
+    current_transcript = db.get(TranscriptionRevision, answer.active_transcription_revision_id) if answer.active_transcription_revision_id else None
+    uncertain = current_transcript and (current_transcript.status == "unreadable" or current_transcript.flags or transcription_flags(current_transcript.literal_text))
+    if uncertain and body.override_raw is None and body.answer_status in {"correct", "partially_correct", "incorrect", "reviewed"}:
+        raise HTTPException(status_code=409, detail={"code": "UNREADABLE_TRANSCRIPTION_REVIEW_REQUIRED"})
     if body.answer_status == "verified_blank":
         blank_transcript = db.get(TranscriptionRevision, answer.active_transcription_revision_id) if answer.active_transcription_revision_id else None
         if not blank_transcript or blank_transcript.status != "verified_blank" or blank_transcript.literal_text.strip():
@@ -299,6 +308,14 @@ def finalize_submission(submission_id: str, body: FinalizeRequest,
         .where(ReviewItem.review_revision_id == review.id).order_by(ReviewItem.stable_question_id).with_for_update()).all()}
     answers = {answer.stable_question_id: answer for answer in db.scalars(select(Answer)
         .where(Answer.submission_id == submission.id).order_by(Answer.stable_question_id).with_for_update()).all()}
+    if layout:
+        linked = set(db.scalars(select(AnswerRegionLink.region_id).join(Answer,Answer.id == AnswerRegionLink.answer_id).where(
+            Answer.submission_id == submission.id,Answer.active_mapping_revision_id == AnswerRegionLink.mapping_revision_id)).all())
+        unresolved = db.scalars(select(Region.id).where(Region.page_image_revision_id.in_(layout.ordered_page_image_revision_ids),
+            Region.region_type.in_(["answer","unassigned"]),Region.excluded_from_mapping.is_(False))).all()
+        blockers.extend(f"region:{rid}:unassigned" for rid in unresolved if rid not in linked)
+    blockers.extend(f"{answer.stable_question_id}:auto_mapping_review_required" for answer in answers.values()
+                    if answer.mapping_status == "auto_mapped")
     grades = {}
     snapshot_details = []
     questions = {question.question_id: question for question in specs}
@@ -308,6 +325,12 @@ def finalize_submission(submission_id: str, body: FinalizeRequest,
         if not item:
             blockers.append(f"{question.label}:missing_review_item")
             continue
+        if answer and answer.mapping_status == "unmapped" and item.answer_status != "verified_blank":
+            blockers.append(f"{question.label}:missing_mapping")
+        if answer and item.answer_status != "verified_blank":
+            from .auto_mapping import current_mapping
+            if not current_mapping(db,submission,answer):
+                blockers.append(f"{question.label}:stale_mapping")
         if item.transcription_revision_id != (answer.active_transcription_revision_id if answer else None) or item.mapping_revision_id != (answer.active_mapping_revision_id if answer else None):
             blockers.append(f"{question.label}:stale_inputs")
             continue
@@ -348,7 +371,13 @@ def finalize_submission(submission_id: str, body: FinalizeRequest,
         except DomainError as exc:
             blockers.append(f"{question.label}:{str(exc)}")
     calculation = calculate_grade(specs, grades, final=True)
-    blockers.extend(calculation.blockers)
+    # A skipped grade already has a more specific review/input blocker above.
+    # Do not report it again as a missing answer, which suggests the scan is empty.
+    specifically_blocked = {question.label for question in specs
+        if any(not blocker.startswith(("region:", "job:")) and blocker.startswith(f"{question.label}:")
+               for blocker in blockers)}
+    blockers.extend(blocker for blocker in calculation.blockers
+        if not (blocker.endswith(":missing_answer") and blocker[:-len(":missing_answer")] in specifically_blocked))
     if blockers:
         raise HTTPException(status_code=409, detail={"code": "FINALIZATION_BLOCKED", "blockers": sorted(set(blockers))})
     if review.assessment_revision_id != submission.assessment_revision_id or review.document_id != document.id or review.identity_confirmation_id != confirmation.id:

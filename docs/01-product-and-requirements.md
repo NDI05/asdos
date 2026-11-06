@@ -31,7 +31,7 @@ Pemilik assessment membuat soal, rubrik, anggota, dan kebijakan nilai; mengesahk
 | --- | --- | --- | --- |
 | FR-01 | Buat assessment dan daftar soal bernomor | P0 | ID stabil dan label seperti 1, 2a, 2b tersimpan tanpa ambigu |
 | FR-02 | Input soal manual/terstruktur dan impor PDF soal | P0 | Hasil ekstraksi diperiksa dosen; soal belum disetujui tidak dapat dinilai |
-| FR-03 | Input kunci, kriteria, kredit parsial, bobot per nomor | P0 | Validasi jumlah bobot, skor maksimum, dan duplikasi kriteria |
+| FR-03 | Input bobot; model menyusun acuan/kriteria/kredit parsial dari soal | P0 | Tidak wajib mengetik kunci; draft AI divalidasi lalu ditinjau/disahkan dosen |
 | FR-04 | Buat/konfirmasi identitas submission | P0 | PDF terhubung ke mahasiswa yang dikonfirmasi; NIM disimpan string |
 | FR-05 | Upload PDF batch, validasi dan progres | P0 | File invalid terisolasi, file lain tetap diproses |
 | FR-06 | Render, orientasi, quality check, preprocessing | P0 | Asli dan turunan dapat dibandingkan; kegagalan tidak merusak asli |

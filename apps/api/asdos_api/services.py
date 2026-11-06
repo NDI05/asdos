@@ -121,13 +121,18 @@ def add_job(
     db: Session,
     *,
     assessment_id: str,
-    document_id: str,
+    document_id: str | None,
     kind: str,
     input_fingerprint: str,
     submission_id: str | None = None,
     answer_id: str | None = None,
     draft_assessment_revision_id: str | None = None,
 ) -> PipelineJob:
+    if kind == "rubric_generate":
+        if not draft_assessment_revision_id or document_id or submission_id or answer_id:
+            raise ValueError("rubric generation must be assessment-revision scoped")
+    elif not document_id:
+        raise ValueError("document-scoped pipeline job requires a document")
     previous = db.scalar(select(PipelineJob).where(
         PipelineJob.input_fingerprint == input_fingerprint,
         PipelineJob.kind == kind,
@@ -156,6 +161,8 @@ def add_job(
         "question_import": "document.process",
         "transcribe_answer": "answer.transcribe",
         "grade_answer": "answer.grade",
+        "rubric_generate": "rubric.generate",
+        "analyze_answers": "document.analyze_answers",
     }[kind]
     db.add(OutboxEvent(event_type=event_type, job_id=job.id, payload={"job_id": job.id}))
     return job
@@ -163,13 +170,16 @@ def add_job(
 
 def publish_job_outbox(db: Session, job_id: str) -> None:
     """Publish after the caller committed; failures leave the DB outbox pending."""
-    from apps.worker.tasks import grade_answer, process_document, transcribe_answer
+    from apps.worker.tasks import grade_answer, process_document, transcribe_answer, generate_rubric
+    from apps.worker.auto_answers import analyze_answers
 
     task_map = {
         "document_render": process_document,
         "question_import": process_document,
         "transcribe_answer": transcribe_answer,
         "grade_answer": grade_answer,
+        "rubric_generate": generate_rubric,
+        "analyze_answers": analyze_answers,
     }
     events = db.scalars(select(OutboxEvent).where(OutboxEvent.job_id == job_id, OutboxEvent.published_at.is_(None))).all()
     for event in events:

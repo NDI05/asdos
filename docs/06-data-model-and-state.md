@@ -75,6 +75,10 @@ Diagram hanya hubungan inti; tabel di atas menjadi kamus model lebih lengkap.
 
 ## State machines
 
+Implementasi otomatis menambah `documents.auto_process` (false untuk data lama; default upload baru true) dan `documents.analysis_result` sebagai ringkasan/pointer hasil. `regions.analysis` menyimpan keluaran model terkait job/layout, bbox/label/flags, literal OCR, crop hash dan model-run refs. `regions.excluded_from_mapping` adalah keputusan manusia terpisah, diaudit dengan alasan. Geometri/output model lama tidak ditimpa oleh review.
+
+Job `analyze_answers` melalui `locate_answers` → `transcribe_regions` → `map_answers`. Promosi region, mapping, transkripsi dan status sukses atomik setelah pemeriksaan lease/cancel, dokumen/layout serta snapshot kerja manual. Pemetaan aktif tidak ditimpa. `auto_mapped` menjadi `mapped` setelah konfirmasi manusia atau koreksi pemetaan eksplisit. Area belum dipetakan/dikecualikan memblokir finalisasi. Penggantian PDF tidak menampilkan mapping/transkripsi lama sebagai aktif.
+
 | Objek | Status/transisi sah |
 | --- | --- |
 | assessment revision | draft → approved → superseded; revisi approved tidak diedit |

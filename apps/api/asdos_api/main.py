@@ -19,6 +19,7 @@ from .router_auth import router as auth_router
 from .router_review import router as review_router
 from .router_submissions import router as submissions_router
 from .router_exports import router as exports_router
+from .router_auto_mapping import router as auto_mapping_router
 
 
 def create_app() -> FastAPI:
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     application.include_router(submissions_router)
     application.include_router(review_router)
     application.include_router(exports_router)
+    application.include_router(auto_mapping_router)
 
     web_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
     index_file = web_dist / "index.html"
@@ -139,6 +141,18 @@ def _error_message(code: str) -> str:
         "FINALIZATION_BLOCKED": "Masih ada jawaban yang perlu diselesaikan sebelum finalisasi.",
         "MODEL_UNAVAILABLE": "Model lokal belum siap. Transkripsi dan penilaian manual tetap tersedia.",
         "MODEL_DEVICE_UNAVAILABLE": "Perangkat inferensi model tidak tersedia pada konfigurasi ini.",
+        "TROCR_UNAVAILABLE": "Checkpoint TrOCR eksperimental belum tersedia pada komputer ini.",
+        "TROCR_MANIFEST_INVALID": "Provenance checkpoint TrOCR tidak valid. Periksa ulang folder model lokal.",
+        "TROCR_CHECKPOINT_INCOMPLETE": "Berkas checkpoint TrOCR belum lengkap.",
+        "TROCR_CHECKPOINT_HASH_MISMATCH": "Hash checkpoint TrOCR berubah dan tidak cocok dengan manifest.",
+        "TROCR_LOAD_FAILED": "Checkpoint TrOCR gagal dimuat pada runtime lokal ini.",
+        "TROCR_RUNTIME_INCOMPATIBLE": "Versi runtime lokal belum mendukung checkpoint TrOCR ini.",
+        "TROCR_LINE_SEGMENTATION_FAILED": "Baris pada area jawaban tidak dapat dipisahkan. Periksa crop atau transkripsikan manual.",
+        "TRANSCRIBER_CONFIG_INVALID": "Pilihan transcriber lokal tidak dikenal. Gunakan qwen atau trocr.",
+        "UNREADABLE_TRANSCRIPTION_REVIEW_REQUIRED": "Perbaiki bagian transkripsi yang tidak terbaca sebelum menilai.",
+        "RUBRIC_INCOMPLETE": "Acuan penilaian belum lengkap. Buat acuan otomatis lalu tinjau hasilnya.",
+        "STALE_OR_APPROVED_REVISION": "Versi soal berubah atau sudah disahkan. Muat ulang atau buat revisi baru.",
+        "INVALID_QUESTION_WEIGHT": "Bobot harus berupa angka positif dan terbatas.",
         "PDF_TOO_LARGE": "Ukuran PDF melebihi batas 50 MiB.",
         "NOT_A_PDF": "Berkas tidak terdeteksi sebagai PDF.",
     }

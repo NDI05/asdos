@@ -38,6 +38,10 @@ Klik bukti kriteria memusatkan gambar pada region/line terkait. Untuk jawaban li
 
 Tombol penting: koreksi teks, tambah/pindah region, ubah nomor, tandai kosong terverifikasi, tandai tidak terbaca, usulkan nilai, terima usulan, simpan revisi, sahkan. Terima usulan tetap mencatat aktor manusia. Aksi bulk tidak boleh mengesahkan item berpenghalang.
 
+Upload baru secara default menjalankan render → deteksi area → OCR literal → usulan pemetaan otomatis. Panel progres memperlihatkan tahap/counter aktual. Mode manual tetap menyediakan pemetaan → OCR. Hasil otomatis ditampilkan sebagai draf: dosen mengonfirmasi identitas lalu menyetujui atau memperbaiki pemetaan. Area tidak dikenal tetap memiliki gambar/teks untuk dipetakan melalui pilihan nomor; pengecualian bukan jawaban wajib beralasan. Untuk memindahkan area yang sudah terikat soal, pemetaan lama dapat dikosongkan tanpa menghapus area/OCR. Proses ulang tidak menimpa koreksi yang sudah ada.
+
+Saat lembar dibuka kembali, UI mengambil job terbaru per tahap/jawaban untuk dokumen aktif dari API. Polling selama ada job aktif memperbarui status dan hasil tanpa menimpa draf koreksi yang sumber revisinya tidak berubah. Jika koneksi status gagal, UI memberi pesan mencoba terhubung kembali. Progress bar indeterminate dipakai bila worker belum menyediakan total; angka hanya ditampilkan dari counter aktual. Gagal/cancel menghentikan animasi; retry tersedia sesuai batas server. Membuka lembar menggulir ke atas agar panel progres terlihat.
+
 ## Visualisasi hasil
 
 1. Progress per tahap: diterima, diproses, perlu review, disahkan, gagal. Persentase berdasarkan total submission, bukan task internal.
@@ -71,3 +75,7 @@ Status memakai teks/ikon selain warna; fokus keyboard terlihat; panel dapat diub
 ## Skenario penerimaan UX
 
 Dosen menginput 3 soal berbobot 20/30/50, mengunggah satu PDF berisi jawaban tidak berurutan, memperbaiki pemetaan satu region, membetulkan satu kata OCR, menyetujui skor, dan mengekspor Excel tanpa menyalin nilai manual. Unduhan memperlihatkan nilai yang sama dan semua alasan perubahan dapat dilihat kembali.
+
+### Batch kelas dan preview (5 November 2026)
+
+Dosen dapat memilih hingga 100 PDF dan mengunggah semuanya dalam satu alur; browser perlu tetap terbuka sampai unggahan selesai. Setiap PDF memperoleh submission serta job terpisah, dan daftar memperlihatkan nama berkas, progres pekerjaan serta identitas OCR sebagai usulan. Setelah dosen mengonfirmasi identitas dan mapping, jawaban siap otomatis masuk antrean usulan nilai, tetap memerlukan tinjauan sebelum pengesahan. Bila gagal/ambigu, tindak lanjut manual tetap tersedia. Pemilihan area memperlihatkan label nomor, status dipilih, dan pratinjau kotak saat ditarik; pemetaan nomor dapat dikosongkan tanpa menghapus region atau histori.
