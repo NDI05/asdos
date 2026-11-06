@@ -1,6 +1,6 @@
 # Pelaporan Keamanan ASDOS
 
-ASDOS masih berupa prototipe; belum ada versi produksi yang didukung. Untuk kerentanan, gunakan tab **Security → Report a vulnerability** pada repository GitHub jika fitur private vulnerability reporting tersedia. Jangan membuka issue publik yang memuat detail eksploit atau data mahasiswa. Jika kanal privat belum tersedia, hubungi maintainer melalui profil GitHub repository tanpa mengirim scan, NIM, nilai, atau secret.
+ASDOS masih berupa prototipe; belum ada versi produksi yang didukung. Untuk kerentanan, gunakan [pelaporan kerentanan privat](https://github.com/NDI05/asdos/security/advisories/new) atau tab **Security → Report a vulnerability**. Jangan membuka issue publik yang memuat detail eksploit atau data mahasiswa. Jangan mengirim scan, NIM, nilai, atau secret.
 
 Jangan membuka issue publik berisi PDF mahasiswa, identitas, nilai, token akses, atau langkah eksploitasi terhadap instalasi yang masih rentan. Gunakan kanal privat yang tercantum pada repository setelah tersedia. Sertakan versi, dampak, langkah reproduksi dengan data sintetik, dan perbaikan yang disarankan.
 
