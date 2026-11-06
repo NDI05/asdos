@@ -1,0 +1,4 @@
+# Direct runtime pins for Python 3.12, captured 2026-11-03 from package releases.
+# Generate uv.lock (including transitive versions and hashes) with `uv lock` when
+# the package index is reachable. This file is not a substitute for uv.lock.
+-e .

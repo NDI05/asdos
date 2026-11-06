@@ -1,0 +1,129 @@
+services:
+  db:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_DB: asdos
+      POSTGRES_USER: asdos
+      POSTGRES_PASSWORD: ${ASDOS_DB_PASSWORD:?Set ASDOS_DB_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asdos -d asdos"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        ASDOS_INSTALL_MODEL: ${ASDOS_INSTALL_MODEL:-0}
+    environment: &app_environment
+      ASDOS_ENV: development
+      ASDOS_DATABASE_URL: postgresql+psycopg://asdos:${ASDOS_DB_PASSWORD}@db:5432/asdos
+      ASDOS_REDIS_URL: redis://redis:6379/0
+      ASDOS_ARTIFACT_DIR: /app/data/private
+      ASDOS_MODEL_DIR: /app/models/Qwen3-VL-4B-Instruct
+      ASDOS_MODEL_REVISION: ${ASDOS_MODEL_REVISION:-ebb281ec70b05090aa6165b016eac8ec08e71b17}
+      ASDOS_COOKIE_SECURE: "false"
+      ASDOS_CELERY_EAGER: "false"
+      ASDOS_AUTO_CREATE: "false"
+      ASDOS_SESSION_SECRET: ${ASDOS_SESSION_SECRET:-}
+      ASDOS_MODEL_ALLOW_CPU: ${ASDOS_MODEL_ALLOW_CPU:-false}
+    volumes:
+      - app_data:/app/data
+      - ../models:/app/models:ro
+    ports:
+      - "${ASDOS_API_PUBLISH:-127.0.0.1:8000:8000}"
+    command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.asdos_api.main:app --host 0.0.0.0 --port 8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        ASDOS_INSTALL_MODEL: ${ASDOS_INSTALL_MODEL:-0}
+    environment: *app_environment
+    volumes:
+      - app_data:/app/data
+      - ../models:/app/models:ro
+    command: ["celery", "-A", "apps.worker.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=1"]
+    depends_on:
+      api: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        ASDOS_INSTALL_MODEL: "0"
+    environment: *app_environment
+    command: ["celery", "-A", "apps.worker.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    depends_on:
+      api: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    environment:
+      ASDOS_API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:4173:4173"
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+
+  e2e:
+    profiles: [test]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.test
+    environment:
+      <<: *app_environment
+      ASDOS_TEST_COMPOSE: "true"
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      api: {condition: service_healthy}
+      worker: {condition: service_started}
+    command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/integration/test_manual_workflow.py"]
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 256
+
+volumes:
+  postgres_data:
+  redis_data:
+  app_data:
+
+networks:
+  default:
+    internal: true

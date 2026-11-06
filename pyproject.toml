@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=75,<82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asdos"
+version = "0.1.0"
+description = "Local-first, human-approved assistant for reviewing handwritten exam answers."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.162.0",
+  "uvicorn[standard]==0.54.0",
+  "pydantic==2.14.2",
+  "SQLAlchemy==2.1.6",
+  "alembic==1.20.1",
+  "psycopg[binary]==3.3.7",
+  "celery[redis]==5.6.3",
+  "redis==8.0.0",
+  "pypdfium2==5.14.0",
+  "opencv-python-headless==4.12.0.88",
+  "Pillow==13.0.0",
+  "XlsxWriter==3.2.6",
+  "python-multipart==0.0.22",
+  "argon2-cffi==25.1.0",
+]
+
+[project.optional-dependencies]
+model = [
+  "torch==2.15.0",
+  "transformers==5.22.1",
+  "accelerate==1.13.0",
+  "qwen-vl-utils==0.0.14",
+]
+vision-baseline = ["paddleocr==3.6.0"]
+test = [
+  "pytest==9.0.2",
+  "httpx2==2.16.0",
+  "openpyxl==3.1.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["apps*", "packages*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.uv]
+package = true

@@ -1,0 +1,24 @@
+{
+  "schema_version": "asdos-model-manifest.v1",
+  "created_at": "2026-11-03",
+  "default_candidate": {
+    "model_id": "Qwen/Qwen3-VL-4B-Instruct",
+    "revision": "ebb281ec70b05090aa6165b016eac8ec08e71b17",
+    "license": "Apache-2.0 (upstream model card; verify LICENSE file on provision)",
+    "runtime": "PyTorch + Transformers, local-only inference",
+    "transformers": "5.22.1",
+    "torch": "2.15.0",
+    "trust_remote_code": false,
+    "status": "not_downloaded_network_unavailable",
+    "sha256": null
+  },
+  "comparison_baseline": {
+    "recognizer": "latin_PP-OCRv5_mobile_rec",
+    "detector": "PP-OCRv5_mobile_det",
+    "language": "id",
+    "license": "Apache-2.0 per project model selection; verify both runtime/model notices on provision",
+    "status": "adapter_defined_weights_not_downloaded",
+    "revision": null,
+    "sha256": null
+  }
+}
